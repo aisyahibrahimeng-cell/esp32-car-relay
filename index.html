@@ -21,7 +21,7 @@
   <body>
     <img id="stream" alt="Waiting for video..." />
     <script>
-      const ws = new WebSocket(`ws://${location.host}`);
+      const ws = new WebSocket("wss://" + window.location.host);
       const img = document.getElementById("stream");
 
       ws.binaryType = "arraybuffer";
