@@ -1,43 +1,198 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <title>ESP32-CAM Live Stream (WebSocket)</title>
-    <style>
-      body {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: #111;
-        height: 100vh;
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RC Car Controller</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: sans-serif;
+      background: #000;
+    }
+
+    /* Fullscreen livestream */
+   #cam-feed {
+   position: fixed;
+   top: 0;
+   left: 0;
+   width: 100vw;
+   height: 100vh;
+   object-fit: cover;
+   z-index: 1;
+  }
+
+    /* Control buttons overlay */
+    .control-grid {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: grid;
+      grid-template-columns: repeat(3, 80px);
+      grid-gap: 10px;
+      justify-content: center;
+      pointer-events: auto;
+      z-index: 2;
+    }
+
+    .button {
+      width: 80px;
+      height: 80px;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      border-radius: 12px;
+      font-size: 24px;
+      border: 2px solid #00c853;
+      transition: 0.2s;
+    }
+
+    .button:active {
+      background: #00c853;
+      transform: scale(0.95);
+    }
+
+    #status {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: #00c853;
+      font-size: 16px;
+      background: rgba(0,0,0,0.5);
+      padding: 5px 10px;
+      border-radius: 8px;
+      z-index: 3;
+    }
+  </style>
+</head>
+<body>
+  <!-- ✅ Livestream -->
+  <canvas id="cam-feed"></canvas>
+
+  <!-- ✅ Status + Controls -->
+  <p id="status">Connecting to MQTT...</p>
+
+  <div class="control-grid">
+    <div></div>
+    <button class="button" id="forward">▲</button>
+    <div></div>
+
+    <button class="button" id="left">◀</button>
+    <button class="button" id="stop">■</button>
+    <button class="button" id="right">▶</button>
+
+    <div></div>
+    <button class="button" id="backward">▼</button>
+    <div></div>
+  </div>
+
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <script>
+  // ===== WebSocket Livestream =====
+  const canvas = document.getElementById("cam-feed");
+  const ctx = canvas.getContext("2d");
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+
+  const ws = new WebSocket("wss://esp32-car-relay-1.onrender.com");
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => console.log("✅ Connected to livestream WebSocket");
+  ws.onmessage = (event) => {
+  const blob = new Blob([event.data], { type: "image/jpeg" });
+  const img = new Image();
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  };
+  img.src = URL.createObjectURL(blob);
+  };
+  ws.onerror = (err) => console.error("⚠️ WebSocket error:", err);
+  
+    // ===== MQTT Setup =====
+    const brokerUrl = "wss://greencuckoo-a614eda9.a03.euc1.aws.hivemq.cloud:8884/mqtt";
+    const topic = "rc-car/control";
+    const statusEl = document.getElementById("status");
+    const controlGrid = document.querySelector(".control-grid");
+
+    const options = {
+      username: "RC-Car", // replace with your HiveMQ username
+      password: "1234RCcar", // replace with your HiveMQ password
+      reconnectPeriod: 2000,
+      clean: true
+    };
+
+    const client = mqtt.connect(brokerUrl, options);
+
+    client.on("connect", () => {
+      console.log("✅ Connected to HiveMQ Cloud");
+      statusEl.textContent = "✅ Connected to HiveMQ Cloud";
+      statusEl.style.color = "#00c853";
+    });
+
+    client.on("error", (err) => {
+      console.error("Connection failed:", err);
+      statusEl.textContent = "❌ Connection error!";
+      statusEl.style.color = "red";
+    });
+
+    // ===== Send Commands via MQTT =====
+    function sendCommand(cmd) {
+      if (client.connected) {
+        client.publish(topic, cmd);
+        console.log("📤 Sent:", cmd);
+      } else {
+        console.warn("⚠️ MQTT not connected, cannot send:", cmd);
       }
-      img {
-        max-width: 100%;
-        max-height: 100%;
-        border-radius: 10px;
-        box-shadow: 0 0 20px #00ffcc;
+    }
+
+    ["forward","backward","left","right","stop"].forEach(id => {
+      document.getElementById(id).addEventListener("click", () => sendCommand(id));
+    });
+
+    // ===== Gamepad Controls =====
+    let lastCommand = "";
+    function pollGamepad() {
+      const gp = navigator.getGamepads()[0];
+      if (!gp) return;
+
+      const [lx, ly] = [gp.axes[0], gp.axes[1]];
+      let command = "";
+
+      if (ly < -0.5) command = "forward";
+      else if (ly > 0.5) command = "backward";
+      else if (lx < -0.5) command = "left";
+      else if (lx > 0.5) command = "right";
+      else command = "";
+
+      if (command && command !== lastCommand) {
+        sendCommand(command);
+        lastCommand = command;
+      } else if (!command && lastCommand !== "stop") {
+        sendCommand("stop");
+        lastCommand = "stop";
       }
-    </style>
-  </head>
-  <body>
-    <img id="stream" alt="Waiting for video..." />
-    <script>
-      const ws = new WebSocket("wss://" + window.location.host);
-      const img = document.getElementById("stream");
+    }
 
-      ws.binaryType = "arraybuffer";
-      img.onload = () => URL.revokeObjectURL(img.src);
+    setInterval(pollGamepad, 100);
 
-      ws.onmessage = (event) => {
-        if (event.data instanceof ArrayBuffer) {
-            const blob = new Blob([event.data], { type: "image/jpeg" });
-            img.src = URL.createObjectURL(blob);
-        }
-      };
+    // ===== Hide buttons if gamepad detected =====
+    function hideButtons() { controlGrid.style.display = "none"; }
+    function showButtons() { controlGrid.style.display = "grid"; }
 
-      ws.onopen = () => console.log("✅ Connected to WebSocket server");
-      ws.onclose = () => console.log("❌ Disconnected from server");
-    </script>
-  </body>
-</html>
+    window.addEventListener("gamepadconnected", () => {
+      console.log("🎮 Gamepad detected");
+      hideButtons();
+    });
+    window.addEventListener("gamepaddisconnected", () => {
+      console.log("🎮 Gamepad disconnected");
+      showButtons();
+    });
 
+    window.addEventListener("load", () => {
+      if (navigator.getGamepads()[0]) hideButtons();
+    });
+  </script>
+</body>
 </html>
